@@ -337,6 +337,8 @@ function runCycle() {
       const cp = best.cl[best.cl.length - 1]; const wt = cond.w[aId] || .1;
       ags[aId].ls = best.sig.s; ags[aId].lr = best.sig.r; ags[aId].lp = PL[best.pair];
 
+      console.log("[DEBUG]     Agent", aId, "best signal:", best.sig.s, "conf:", best.sig.c, "pair:", best.pair);
+      
       // Log agent scan reasoning
       const scanned = ps.filter(p => p.sc > 0).map(p => ({ pair: PL[p.pair], signal: p.sig.s, conf: p.sc }));
       const reason = {
