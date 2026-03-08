@@ -304,6 +304,9 @@ function runCycle() {
   const cycleReasons = [];
   console.log("[DEBUG] Cycle", tick, "- reasoning capture started");
 
+  console.log("[DEBUG] CD object:", Object.keys(CD || {}), "length:", Object.keys(CD || {}).length);
+  console.log("[DEBUG] portfolios keys:", Object.keys(portfolios || {}));
+  
   Object.entries(CD).forEach(([cId, cond]) => {
     console.log("[DEBUG] Processing conductor:", cId, "with", cond.ag?.length || 0, "agents");
     if (!portfolios[cId]) return;
