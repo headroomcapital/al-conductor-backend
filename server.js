@@ -305,6 +305,7 @@ function runCycle() {
   console.log("[DEBUG] Cycle", tick, "- reasoning capture started");
 
   Object.entries(CD).forEach(([cId, cond]) => {
+    console.log("[DEBUG] Processing conductor:", cId, "with", cond.ag?.length || 0, "agents");
     if (!portfolios[cId]) return;
     const port = portfolios[cId];
     const ags = port.agents;
@@ -314,6 +315,7 @@ function runCycle() {
     }
 
     cond.ag.forEach(aId => {
+      console.log("[DEBUG]   Processing agent:", aId, "for", cId);
       if (!ags[aId]) return;
       const agent = AG[aId]; const sigFn = SIG[aId]; if (!sigFn) return;
       const agTF = agent.tf; const agHTF = agent.htf;
