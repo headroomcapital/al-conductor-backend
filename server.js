@@ -355,6 +355,18 @@ app.get('/api/candles/:tf/:pair', (req, res) => {
   res.json(data.slice(-100));
 });
 
+// Reset simulation
+app.post("/api/reset", async (req, res) => {
+  initPortfolios();
+  positions = {};
+  tradeLog = [];
+  tick = 0;
+  regime = "ranging";
+  await saveState();
+  console.log("═══ SIMULATION RESET ═══");
+  res.json({ status: "reset", agents: Object.keys(AG).length, conductors: Object.keys(CD).length });
+});
+
 // ═══ START ═══
 async function start() {
   console.log('═══ Agent League Backend Starting ═══');
