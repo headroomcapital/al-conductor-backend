@@ -302,6 +302,7 @@ function runCycle() {
   const em = regime === "crash" ? .2 : regime === "bear" ? .6 : regime === "bull" ? 1.2 : 1;
   const newTrades = [];
   const cycleReasons = [];
+  console.log("[DEBUG] Cycle", tick, "- reasoning capture started");
 
   Object.entries(CD).forEach(([cId, cond]) => {
     if (!portfolios[cId]) return;
@@ -415,7 +416,9 @@ function runCycle() {
     tradeLog = [...newTrades, ...tradeLog].slice(0, 500);
   }
   // Store reasoning log
+  console.log("[DEBUG] End cycle", tick, "- cycleReasons.length:", cycleReasons.length);
   if (cycleReasons.length) {
+    console.log("[DEBUG] Storing reasoning entries...");
     // Add conductor summary
     Object.entries(CD).forEach(([cId, cond]) => {
       const p = portfolios[cId];
@@ -429,6 +432,7 @@ function runCycle() {
       });
     });
     reasoningLog = [...cycleReasons, ...reasoningLog].slice(0, 500);
+    console.log("[DEBUG] reasoningLog now has", reasoningLog.length, "entries");
   }
 
   tick++;
