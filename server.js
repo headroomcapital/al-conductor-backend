@@ -499,6 +499,13 @@ app.post("/api/pairs/refresh", async (req, res) => {
   });
 });
 
+// Manual pair refresh
+app.post("/api/pairs/refresh", async (req, res) => {
+  const oldCount = PAIRS.length;
+  await refreshPairs();
+  res.json({ status: "refreshed", pairs: PAIRS.length, was: oldCount, newPairs: PAIRS.slice(0, 10) });
+});
+
 // Current pairs list
 app.get("/api/pairs", (req, res) => {
   res.json({ pairs: PAIRS, count: PAIRS.length });
