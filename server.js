@@ -9,8 +9,55 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
-const PAIRS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT"];
-const PL = {BTCUSDT:"BTC",ETHUSDT:"ETH",BNBUSDT:"BNB",SOLUSDT:"SOL",XRPUSDT:"XRP",DOGEUSDT:"DOGE",ADAUSDT:"ADA",AVAXUSDT:"AVAX"};
+// Dynamic pair list — refreshed from Binance every hour
+let PAIRS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT"];
+let PL = {};
+const MIN_VOLUME_USD = 50_000_000;
+const MAX_PAIRS = 30;
+const PAIR_BLACKLIST = new Set(["USDCUSDT","BUSDUSDT","TUSDUSDT","FDUSDUSDT","EURUSDT","USDPUSDT"]);
+
+function updatePL() {
+  PL = {};
+  PAIRS.forEach(p => { PL[p] = p.replace("USDT", ""); });
+}
+updatePL();
+
+async function refreshPairs() {
+  try {
+    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr");
+    const tickers = await res.json();
+    if (!Array.isArray(tickers)) return;
+
+    const candidates = tickers
+      .filter(t => t.symbol.endsWith("USDT"))
+      .filter(t => !PAIR_BLACKLIST.has(t.symbol))
+      .filter(t => parseFloat(t.quoteVolume) >= MIN_VOLUME_USD)
+      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .slice(0, MAX_PAIRS)
+      .map(t => t.symbol);
+
+    if (candidates.length >= 8) {
+      const prev = PAIRS.length;
+      PAIRS = candidates;
+      updatePL();
+
+      PAIRS.forEach(p => {
+        if (!LIQUIDITY[p]) {
+          const vol = tickers.find(t => t.symbol === p);
+          const qv = vol ? parseFloat(vol.quoteVolume) : 0;
+          if (qv > 500_000_000) LIQUIDITY[p] = { spread: 0.0003, depth: 0.7 };
+          else if (qv > 100_000_000) LIQUIDITY[p] = { spread: 0.0006, depth: 0.4 };
+          else LIQUIDITY[p] = { spread: 0.001, depth: 0.25 };
+        }
+      });
+
+      console.log(`[Pairs] Refreshed: ${PAIRS.length} pairs (was ${prev}). Top: ${PAIRS.slice(0, 5).join(", ")}`);
+    }
+  } catch (e) {
+    console.error("[Pairs] Refresh failed:", e.message);
+  }
+}
+
 const TF_LABEL = {"1h":"1 hour","4h":"4 hour","1d":"Daily","1w":"Weekly"};
 
 // ═══ INDICATOR MATH ═══
@@ -127,6 +174,7 @@ let portfolios = {}; // { aegis: { cap, peak, agents, hist, dd, cb, tc }, ... }
 let positions = {};  // { "aegis_titan_BTCUSDT": { entry, size, dir, ot, sl, tp } }
 let tradeLog = [];   // last 500 trades
 let regime = "ranging";
+let reasoningLog = []; // Conductor decision log — last 500 entries
 let tick = 0;
 let lastCycleTime = null;
 let status = "STARTING";
@@ -211,12 +259,16 @@ function runCycle() {
   regime = detectRegime();
   const em = regime === "crash" ? .2 : regime === "bear" ? .6 : regime === "bull" ? 1.2 : 1;
   const newTrades = [];
+  const cycleReasons = [];
 
   Object.entries(CD).forEach(([cId, cond]) => {
     if (!portfolios[cId]) return;
     const port = portfolios[cId];
     const ags = port.agents;
-    if (port.cb) return;
+    if (port.cb) {
+      cycleReasons.push({ t: Date.now(), tick, cId, type: "CIRCUIT_BREAKER", msg: `${cond.n} circuit breaker active. DD: ${(port.dd*100).toFixed(2)}%. All agents paused.` });
+      return;
+    }
 
     cond.ag.forEach(aId => {
       if (!ags[aId]) return;
@@ -236,7 +288,22 @@ function runCycle() {
       const pk = `${cId}_${aId}_${best.pair}`; const ex = positions[pk];
       const cp = best.cl[best.cl.length - 1]; const wt = cond.w[aId] || .1;
       ags[aId].ls = best.sig.s; ags[aId].lr = best.sig.r; ags[aId].lp = PL[best.pair];
-      if (aId === "shield") return;
+
+      // Log agent scan reasoning
+      const scanned = ps.filter(p => p.sc > 0).map(p => ({ pair: PL[p.pair], signal: p.sig.s, conf: p.sc }));
+      const reason = {
+        t: Date.now(), tick, cId, aId, agentName: agent.n,
+        type: best.sig.s === "HOLD" || best.sig.s === "HEDGE" ? "SCAN" : "SIGNAL",
+        bestPair: PL[best.pair], bestSignal: best.sig.s, bestConf: best.sig.c,
+        threshold: cond.ct, passed: best.sig.c >= cond.ct,
+        reason: best.sig.r,
+        pairsScanned: PAIRS.length,
+        pairsWithSignal: scanned.length,
+        topSignals: scanned.slice(0, 3),
+        indicators: best.sig.ind || {},
+      };
+
+      if (aId === "shield") { reason.type = "HEDGE"; cycleReasons.push(reason); return; }
 
       // Close existing positions
       if (ex) {
@@ -255,13 +322,19 @@ function runCycle() {
           delete positions[pk];
           const trade = { t: Date.now(), cId, aId, pair: best.pair, act: "CLOSE", dir: ex.dir, pnl: rp, pp, reason: cr, price: cp, fill: exitFill, slip: Math.abs(exitFill - cp), fee: exitFee, entry: ex.entry, size: ex.size, dur: Date.now() - ex.ot, ind: best.sig.ind, tf: agTF, htf: agHTF, agentName: agent.n };
           newTrades.push(trade);
+          cycleReasons.push({ t: Date.now(), tick, cId, aId, agentName: agent.n, type: "CLOSED", bestPair: PL[best.pair], msg: `${agent.n} CLOSED ${ex.dir.toUpperCase()} on ${PL[best.pair]}. PnL: ${rp.toFixed(2)} (${(pp*100).toFixed(2)}%). ${cr}`, pnl: rp, pp });
         }
         return;
       }
 
       // Open new positions
       if (best.sig.s === "HOLD" || best.sig.s === "HEDGE") return;
-      if (best.sig.c < cond.ct) return;
+      if (best.sig.c < cond.ct) {
+        reason.type = "REJECTED";
+        reason.msg = `${agent.n} signal ${best.sig.s} on ${PL[best.pair]} — conf ${best.sig.c.toFixed(2)} < threshold ${cond.ct}. Skipped.`;
+        cycleReasons.push(reason);
+        return;
+      }
       const ap = Object.keys(positions).filter(k => k.startsWith(`${cId}_${aId}`)).length; if (ap >= 2) return;
       const dir = best.sig.s === "LONG" ? "long" : "short"; const sz = port.cap * wt * em; if (sz < 10) return;
       const atrArr = atr(best.cn); const atrVal = atrArr[atrArr.length - 1] || 0;
@@ -270,6 +343,12 @@ function runCycle() {
       positions[pk] = { entry: fillPrice, size: sz, dir, ot: Date.now(), sl: best.sig.sl, tp: best.sig.tp };
       ags[aId].op = (ags[aId].op || 0) + 1; port.tc = (port.tc || 0) + 1;
       const trade = { t: Date.now(), cId, aId, pair: best.pair, act: "OPEN", dir, size: sz, reason: best.sig.r, price: cp, fill: fillPrice, slip: Math.abs(fillPrice - cp), fee: entryCost, conf: best.sig.c, sl: best.sig.sl, tp: best.sig.tp, ind: best.sig.ind, strat: agent.s, tf: agTF, htf: agHTF, hold: agTF === "1d" || agTF === "1w" ? "weeks" : agTF === "4h" ? "days" : "hours", agentName: agent.n };
+      reason.type = "DEPLOYED";
+      reason.msg = `${agent.n} DEPLOYED ${dir.toUpperCase()} on ${PL[best.pair]} @ ${fillPrice.toFixed(2)} (slip: ${Math.abs(fillPrice - cp).toFixed(2)}). Conf: ${best.sig.c.toFixed(2)}. Size: ${sz.toFixed(0)}.`;
+      reason.fill = fillPrice;
+      reason.slippage = Math.abs(fillPrice - cp);
+      reason.size = sz;
+      cycleReasons.push(reason);
       newTrades.push(trade);
     });
 
@@ -293,6 +372,23 @@ function runCycle() {
   if (newTrades.length) {
     tradeLog = [...newTrades, ...tradeLog].slice(0, 500);
   }
+  // Store reasoning log
+  if (cycleReasons.length) {
+    // Add conductor summary
+    Object.entries(CD).forEach(([cId, cond]) => {
+      const p = portfolios[cId];
+      if (!p) return;
+      const tv = p.hist?.[p.hist.length - 1]?.v || p.cap;
+      const openPos = Object.keys(positions).filter(k => k.startsWith(cId)).length;
+      cycleReasons.push({
+        t: Date.now(), tick, cId, type: "SUMMARY",
+        msg: `${cond.n}: Portfolio ${tv.toFixed(2)} | DD: ${(p.dd*100).toFixed(2)}% | Open: ${openPos} | Regime: ${regime}`,
+        portfolio: tv, drawdown: p.dd, openPositions: openPos, regime
+      });
+    });
+    reasoningLog = [...cycleReasons, ...reasoningLog].slice(0, 500);
+  }
+
   tick++;
   lastCycleTime = new Date().toISOString();
 }
@@ -366,7 +462,7 @@ app.get('/api/state', (req, res) => {
   PAIRS.forEach(p => { const d = candles["4h"]?.[p]; if (d?.length) prices[p] = d[d.length - 1].close; });
   res.json({
     portfolios, positions, regime, tick, lastCycleTime, status,
-    prices, agents: AG, conductors: CD, tradeLog: tradeLog.slice(0, 100)
+    prices, agents: AG, conductors: CD, tradeLog: tradeLog.slice(0, 100), pairCount: PAIRS.length, pairs: PAIRS
   });
 });
 
@@ -378,6 +474,22 @@ app.get('/api/trades', (req, res) => {
   let trades = tradeLog;
   if (conductor) trades = trades.filter(t => t.cId === conductor);
   res.json({ trades: trades.slice(offset, offset + limit), total: trades.length });
+});
+
+// Reasoning log — conductor decision stream
+app.get("/api/reasoning", (req, res) => {
+  const conductor = req.query.conductor;
+  const type = req.query.type;
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+  let log = reasoningLog;
+  if (conductor) log = log.filter(r => r.cId === conductor);
+  if (type) log = log.filter(r => r.type === type);
+  res.json({ log: log.slice(0, limit), total: reasoningLog.length, pairs: PAIRS.length, regime, tick });
+});
+
+// Current pairs list
+app.get("/api/pairs", (req, res) => {
+  res.json({ pairs: PAIRS, count: PAIRS.length });
 });
 
 // Candle data for charts
@@ -411,9 +523,13 @@ async function start() {
     console.log('Fresh start — initializing portfolios');
   }
 
+  // Refresh pairs from Binance
+  await refreshPairs();
+  console.log(`Trading ${PAIRS.length} pairs: ${PAIRS.slice(0, 8).join(", ")}${PAIRS.length > 8 ? "..." : ""}`);
+
   // Initial data fetch
   status = "LOADING";
-  console.log('Fetching initial candle data (1h, 4h, 1d, 1w × 8 pairs)...');
+  console.log(`Fetching initial candle data (1h, 4h, 1d, 1w × ${PAIRS.length} pairs)...`);
   await fetchCandles(true);
   console.log('Initial data loaded');
 
@@ -426,10 +542,13 @@ async function start() {
   // Schedule: run every 60 seconds
   setInterval(cycle, 60000);
 
+  // Refresh pairs every hour
+  setInterval(refreshPairs, 3600000);
+
   // Start API server
   app.listen(PORT, () => {
     console.log(`API server running on port ${PORT}`);
-    console.log(`Endpoints: GET / | /api/state | /api/trades | /api/candles/:tf/:pair`);
+    console.log(`Endpoints: GET / | /api/state | /api/trades | /api/candles/:tf/:pair | /api/reasoning | /api/pairs`);
   });
 }
 
