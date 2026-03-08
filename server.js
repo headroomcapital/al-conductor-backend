@@ -487,6 +487,18 @@ app.get("/api/reasoning", (req, res) => {
   res.json({ log: log.slice(0, limit), total: reasoningLog.length, pairs: PAIRS.length, regime, tick });
 });
 
+// Manual pair refresh
+app.post("/api/pairs/refresh", async (req, res) => {
+  const oldCount = PAIRS.length;
+  await refreshPairs();
+  res.json({ 
+    status: "refreshed", 
+    pairs: PAIRS.length, 
+    was: oldCount,
+    newPairs: PAIRS.slice(0, 10) 
+  });
+});
+
 // Current pairs list
 app.get("/api/pairs", (req, res) => {
   res.json({ pairs: PAIRS, count: PAIRS.length });
