@@ -12,7 +12,7 @@ const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPAB
 // Dynamic pair list — refreshed from Binance every hour
 let PAIRS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT"];
 let PL = {};
-const MIN_VOLUME_USD = 50_000_000;
+const MIN_VOLUME_USD = 10_000_000; // Lower threshold
 const MAX_PAIRS = 30;
 const PAIR_BLACKLIST = new Set(["USDCUSDT","BUSDUSDT","TUSDUSDT","FDUSDUSDT","EURUSDT","USDPUSDT"]);
 
@@ -24,8 +24,10 @@ updatePL();
 
 async function refreshPairs() {
   try {
+    console.log("[Pairs] Fetching from Binance...");
     const res = await fetch("https://api.binance.com/api/v3/ticker/24hr");
     const tickers = await res.json();
+    console.log("[Pairs] Got", tickers?.length || 0, "tickers from Binance");
     if (!Array.isArray(tickers)) return;
 
     const candidates = tickers
@@ -36,6 +38,7 @@ async function refreshPairs() {
       .slice(0, MAX_PAIRS)
       .map(t => t.symbol);
 
+    console.log("[Pairs] Found", candidates.length, "candidates after filtering");
     if (candidates.length >= 8) {
       const prev = PAIRS.length;
       PAIRS = candidates;
