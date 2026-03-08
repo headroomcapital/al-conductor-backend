@@ -9,7 +9,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
-// Dynamic pair list — refreshed from Binance every hour
+// Dynamic pair list — refreshed from Bybit every hour
 let PAIRS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -55,25 +55,25 @@ updatePL();
 
 async function refreshPairs() {
   try {
-    console.log("[Pairs] Fetching from Binance...");
-    const res = await fetch("https://api.binance.com/api/v3/ticker/24hr");
+    console.log("[Pairs] Fetching from Bybit...");
+    const res = await fetch("https://api.bybit.com/v5/market/tickers?category=spot");
     console.log("[Pairs] Response status:", res.status, res.statusText);
-    
+
     if (!res.ok) {
       console.log("[Pairs] Fetch failed:", res.status, await res.text());
       return;
     }
-    
-    const tickers = await res.json();
-    console.log("[Pairs] Got", tickers?.length || 0, "tickers from Binance");
-    console.log("[Pairs] Sample ticker:", JSON.stringify(tickers?.[0], null, 2));
+
+    const json = await res.json();
+    const tickers = json?.result?.list;
+    console.log("[Pairs] Got", tickers?.length || 0, "tickers from Bybit");
     if (!Array.isArray(tickers)) return;
 
     const candidates = tickers
       .filter(t => t.symbol.endsWith("USDT"))
       .filter(t => !PAIR_BLACKLIST.has(t.symbol))
-      .filter(t => parseFloat(t.quoteVolume) >= MIN_VOLUME_USD)
-      .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+      .filter(t => parseFloat(t.turnover24h) >= MIN_VOLUME_USD)
+      .sort((a, b) => parseFloat(b.turnover24h) - parseFloat(a.turnover24h))
       .slice(0, MAX_PAIRS)
       .map(t => t.symbol);
 
@@ -86,7 +86,7 @@ async function refreshPairs() {
       PAIRS.forEach(p => {
         if (!LIQUIDITY[p]) {
           const vol = tickers.find(t => t.symbol === p);
-          const qv = vol ? parseFloat(vol.quoteVolume) : 0;
+          const qv = vol ? parseFloat(vol.turnover24h) : 0;
           if (qv > 500_000_000) LIQUIDITY[p] = { spread: 0.0003, depth: 0.7 };
           else if (qv > 100_000_000) LIQUIDITY[p] = { spread: 0.0006, depth: 0.4 };
           else LIQUIDITY[p] = { spread: 0.001, depth: 0.25 };
@@ -229,7 +229,10 @@ function initPortfolios() {
   });
 }
 
-// ═══ BINANCE FETCH ═══
+// ═══ BYBIT INTERVAL MAP ═══
+const BYBIT_TF = { "1h": "60", "4h": "240", "1d": "D", "1w": "W" };
+
+// ═══ BYBIT FETCH ═══
 async function fetchCandles(initial = false) {
   const tfs = new Set();
   Object.values(AG).forEach(a => { tfs.add(a.tf); if (a.htf) tfs.add(a.htf); });
@@ -237,13 +240,18 @@ async function fetchCandles(initial = false) {
   const limit = initial ? 100 : 3;
 
   for (const tf of tfs) {
+    const interval = BYBIT_TF[tf];
+    if (!interval) continue;
     if (!candles[tf]) candles[tf] = {};
     for (const pair of PAIRS) {
       try {
-        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${pair}&interval=${tf}&limit=${limit}`);
-        const raw = await res.json();
-        if (!raw?.length) continue;
-        const data = raw.map(k => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
+        const url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${pair}&interval=${interval}&limit=${limit}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        const raw = json?.result?.list;
+        if (!Array.isArray(raw) || !raw.length) continue;
+        // Bybit returns newest-first — reverse to oldest-first
+        const data = raw.slice().reverse().map(k => ({ time: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
         if (initial) {
           candles[tf][pair] = data;
         } else {
@@ -598,7 +606,7 @@ async function start() {
     console.log('Fresh start — initializing portfolios');
   }
 
-  // Refresh pairs from Binance
+  // Refresh pairs from Bybit
   await refreshPairs();
   console.log(`Trading ${PAIRS.length} pairs: ${PAIRS.slice(0, 8).join(", ")}${PAIRS.length > 8 ? "..." : ""}`);
 
