@@ -10,7 +10,38 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
 // Dynamic pair list — refreshed from Binance every hour
-let PAIRS = ["BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT"];
+let PAIRS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "ADAUSDT",
+    "AVAXUSDT",
+    "MATICUSDT",
+    "DOTUSDT",
+    "LINKUSDT",
+    "LTCUSDT",
+    "UNIUSDT",
+    "ATOMUSDT",
+    "ETCUSDT",
+    "XLMUSDT",
+    "ALGOUSDT",
+    "VETUSDT",
+    "FILUSDT",
+    "TRXUSDT",
+    "AAVEUSDT",
+    "EOSUSDT",
+    "AXSUSDT",
+    "SANDUSDT",
+    "MANAUSDT",
+    "ICPUSDT",
+    "THETAUSDT",
+    "FTMUSDT",
+    "HBARUSDT",
+    "EGLDUSDT"
+  ];
 let PL = {};
 const MIN_VOLUME_USD = 10_000_000; // Lower threshold
 const MAX_PAIRS = 30;
