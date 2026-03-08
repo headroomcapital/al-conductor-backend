@@ -26,8 +26,16 @@ async function refreshPairs() {
   try {
     console.log("[Pairs] Fetching from Binance...");
     const res = await fetch("https://api.binance.com/api/v3/ticker/24hr");
+    console.log("[Pairs] Response status:", res.status, res.statusText);
+    
+    if (!res.ok) {
+      console.log("[Pairs] Fetch failed:", res.status, await res.text());
+      return;
+    }
+    
     const tickers = await res.json();
     console.log("[Pairs] Got", tickers?.length || 0, "tickers from Binance");
+    console.log("[Pairs] Sample ticker:", JSON.stringify(tickers?.[0], null, 2));
     if (!Array.isArray(tickers)) return;
 
     const candidates = tickers
