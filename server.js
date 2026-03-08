@@ -9,7 +9,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
-// Dynamic pair list — refreshed from Bybit every hour
+// Dynamic pair list — refreshed from OKX every hour
 let PAIRS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -53,10 +53,14 @@ function updatePL() {
 }
 updatePL();
 
+// OKX uses "BTC-USDT" format; we use "BTCUSDT" internally
+function toOKX(pair) { return pair.replace("USDT", "-USDT"); }
+function fromOKX(instId) { return instId.replace("-USDT", "USDT"); }
+
 async function refreshPairs() {
   try {
-    console.log("[Pairs] Fetching from Bybit...");
-    const res = await fetch("https://api.bybit.com/v5/market/tickers?category=spot");
+    console.log("[Pairs] Fetching from OKX...");
+    const res = await fetch("https://www.okx.com/api/v5/market/tickers?instType=SPOT");
     console.log("[Pairs] Response status:", res.status, res.statusText);
 
     if (!res.ok) {
@@ -65,15 +69,16 @@ async function refreshPairs() {
     }
 
     const json = await res.json();
-    const tickers = json?.result?.list;
-    console.log("[Pairs] Got", tickers?.length || 0, "tickers from Bybit");
+    const tickers = json?.data;
+    console.log("[Pairs] Got", tickers?.length || 0, "tickers from OKX");
     if (!Array.isArray(tickers)) return;
 
     const candidates = tickers
-      .filter(t => t.symbol.endsWith("USDT"))
+      .filter(t => t.instId.endsWith("-USDT"))
+      .map(t => ({ symbol: fromOKX(t.instId), vol: parseFloat(t.volCcy24h) || 0 }))
       .filter(t => !PAIR_BLACKLIST.has(t.symbol))
-      .filter(t => parseFloat(t.turnover24h) >= MIN_VOLUME_USD)
-      .sort((a, b) => parseFloat(b.turnover24h) - parseFloat(a.turnover24h))
+      .filter(t => t.vol >= MIN_VOLUME_USD)
+      .sort((a, b) => b.vol - a.vol)
       .slice(0, MAX_PAIRS)
       .map(t => t.symbol);
 
@@ -85,8 +90,8 @@ async function refreshPairs() {
 
       PAIRS.forEach(p => {
         if (!LIQUIDITY[p]) {
-          const vol = tickers.find(t => t.symbol === p);
-          const qv = vol ? parseFloat(vol.turnover24h) : 0;
+          const cand = tickers.find(t => fromOKX(t.instId) === p);
+          const qv = cand ? parseFloat(cand.volCcy24h) : 0;
           if (qv > 500_000_000) LIQUIDITY[p] = { spread: 0.0003, depth: 0.7 };
           else if (qv > 100_000_000) LIQUIDITY[p] = { spread: 0.0006, depth: 0.4 };
           else LIQUIDITY[p] = { spread: 0.001, depth: 0.25 };
@@ -229,10 +234,10 @@ function initPortfolios() {
   });
 }
 
-// ═══ BYBIT INTERVAL MAP ═══
-const BYBIT_TF = { "1h": "60", "4h": "240", "1d": "D", "1w": "W" };
+// ═══ OKX INTERVAL MAP ═══
+const OKX_TF = { "1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W" };
 
-// ═══ BYBIT FETCH ═══
+// ═══ OKX FETCH ═══
 async function fetchCandles(initial = false) {
   const tfs = new Set();
   Object.values(AG).forEach(a => { tfs.add(a.tf); if (a.htf) tfs.add(a.htf); });
@@ -240,17 +245,19 @@ async function fetchCandles(initial = false) {
   const limit = initial ? 100 : 3;
 
   for (const tf of tfs) {
-    const interval = BYBIT_TF[tf];
-    if (!interval) continue;
+    const bar = OKX_TF[tf];
+    if (!bar) continue;
     if (!candles[tf]) candles[tf] = {};
     for (const pair of PAIRS) {
       try {
-        const url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${pair}&interval=${interval}&limit=${limit}`;
+        const instId = toOKX(pair);
+        const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`;
         const res = await fetch(url);
         const json = await res.json();
-        const raw = json?.result?.list;
+        const raw = json?.data;
         if (!Array.isArray(raw) || !raw.length) continue;
-        // Bybit returns newest-first — reverse to oldest-first
+        // OKX returns newest-first — reverse to oldest-first
+        // Format: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
         const data = raw.slice().reverse().map(k => ({ time: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
         if (initial) {
           candles[tf][pair] = data;
@@ -518,7 +525,7 @@ app.use(cors());
 app.use(express.json());
 
 // Health check
-app.get('/', (req, res) => res.json({ status, tick, regime, lastCycleTime, uptime: process.uptime(), version: "bybit-v3", pairs: PAIRS.length }));
+app.get('/', (req, res) => res.json({ status, tick, regime, lastCycleTime, uptime: process.uptime(), version: "okx-v1", pairs: PAIRS.length }));
 
 // Diagnostic: test exchange API connectivity
 app.get('/api/diag', async (req, res) => {
@@ -628,7 +635,7 @@ async function start() {
     console.log('Fresh start — initializing portfolios');
   }
 
-  // Refresh pairs from Bybit
+  // Refresh pairs from OKX
   await refreshPairs();
   console.log(`Trading ${PAIRS.length} pairs: ${PAIRS.slice(0, 8).join(", ")}${PAIRS.length > 8 ? "..." : ""}`);
 
