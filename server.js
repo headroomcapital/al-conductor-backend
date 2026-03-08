@@ -518,7 +518,29 @@ app.use(cors());
 app.use(express.json());
 
 // Health check
-app.get('/', (req, res) => res.json({ status, tick, regime, lastCycleTime, uptime: process.uptime(), version: "bybit-v2", pairs: PAIRS.length }));
+app.get('/', (req, res) => res.json({ status, tick, regime, lastCycleTime, uptime: process.uptime(), version: "bybit-v3", pairs: PAIRS.length }));
+
+// Diagnostic: test exchange API connectivity
+app.get('/api/diag', async (req, res) => {
+  const results = {};
+  const apis = {
+    bybit_tickers: "https://api.bybit.com/v5/market/tickers?category=spot",
+    bybit_kline: "https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=240&limit=3",
+    binance_ticker: "https://api.binance.com/api/v3/ticker/24hr",
+    coingecko: "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+    coinpaprika: "https://api.coinpaprika.com/v1/tickers/btc-bitcoin",
+    okx_kline: "https://www.okx.com/api/v5/market/candles?instId=BTC-USDT&bar=4H&limit=3",
+    kraken: "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=240&since=0",
+  };
+  for (const [name, url] of Object.entries(apis)) {
+    try {
+      const r = await fetch(url);
+      const txt = await r.text();
+      results[name] = { status: r.status, statusText: r.statusText, bodyPreview: txt.slice(0, 200) };
+    } catch (e) { results[name] = { error: e.message }; }
+  }
+  res.json(results);
+});
 
 // Full state for dashboard
 app.get('/api/state', (req, res) => {
