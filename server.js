@@ -43,9 +43,9 @@ let PAIRS = [
     "EGLDUSDT"
   ];
 let PL = {};
-const MIN_VOLUME_USD = 10_000_000; // Lower threshold
+const MIN_VOLUME_USD = 2_000_000; // Bybit has lower spot volume than Binance
 const MAX_PAIRS = 30;
-const PAIR_BLACKLIST = new Set(["USDCUSDT","BUSDUSDT","TUSDUSDT","FDUSDUSDT","EURUSDT","USDPUSDT"]);
+const PAIR_BLACKLIST = new Set(["USDCUSDT","BUSDUSDT","TUSDUSDT","FDUSDUSDT","EURUSDT","USDPUSDT","USDEUSDT","STABLEUSDT","STETHUSDT","WBTCUSDT","WETHUSDT"]);
 
 function updatePL() {
   PL = {};
@@ -518,7 +518,7 @@ app.use(cors());
 app.use(express.json());
 
 // Health check
-app.get('/', (req, res) => res.json({ status, tick, regime, lastCycleTime, uptime: process.uptime() }));
+app.get('/', (req, res) => res.json({ status, tick, regime, lastCycleTime, uptime: process.uptime(), version: "bybit-v2", pairs: PAIRS.length }));
 
 // Full state for dashboard
 app.get('/api/state', (req, res) => {
