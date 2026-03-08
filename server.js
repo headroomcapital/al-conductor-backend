@@ -181,6 +181,31 @@ function detectRegime() {
   return "ranging";
 }
 
+// ═══ SLIPPAGE MODEL ═══
+const LIQUIDITY = {
+  BTCUSDT: { spread: 0.0002, depth: 1.0 },
+  ETHUSDT: { spread: 0.0003, depth: 0.8 },
+  BNBUSDT: { spread: 0.0005, depth: 0.5 },
+  SOLUSDT: { spread: 0.0006, depth: 0.45 },
+  XRPUSDT: { spread: 0.0006, depth: 0.4 },
+  DOGEUSDT: { spread: 0.001, depth: 0.25 },
+  ADAUSDT: { spread: 0.0008, depth: 0.3 },
+  AVAXUSDT: { spread: 0.0007, depth: 0.35 },
+};
+
+function calcSlippage(pair, price, size, dir, atrVal) {
+  const liq = LIQUIDITY[pair] || { spread: 0.001, depth: 0.3 };
+  const spreadCost = liq.spread / 2;
+  const refDepth = 50000 * liq.depth;
+  const impact = 0.0005 * Math.sqrt(Math.max(size, 10) / refDepth);
+  const volPenalty = atrVal ? (atrVal / price) * 0.05 : 0;
+  const totalSlip = spreadCost + impact + volPenalty;
+  if (dir === "long") return price * (1 + totalSlip);
+  if (dir === "short") return price * (1 - totalSlip);
+  return price;
+}
+
+const TAKER_FEE = 0.00075;
 // ═══ SIMULATION CYCLE ═══
 function runCycle() {
   regime = detectRegime();
@@ -215,16 +240,20 @@ function runCycle() {
 
       // Close existing positions
       if (ex) {
-        const pp = ex.dir === "long" ? (cp - ex.entry) / ex.entry : (ex.entry - cp) / ex.entry;
+        const atrArr = atr(best.cn); const atrVal = atrArr[atrArr.length - 1] || 0;
+        const exitDir = ex.dir === "long" ? "short" : "long";
+        const exitFill = calcSlippage(best.pair, cp, ex.size, exitDir, atrVal);
+        const pp = ex.dir === "long" ? (exitFill - ex.entry) / ex.entry : (ex.entry - exitFill) / ex.entry;
         let sc = false, cr = "";
         if (pp < -.025) { sc = true; cr = `Stop loss on ${agTF}. ${(pp * 100).toFixed(2)}%.`; }
         if (pp > .05) { sc = true; cr = `Take profit on ${agTF}. +${(pp * 100).toFixed(2)}%.`; }
         if (best.sig.s === "HOLD" && pp > .02) { sc = true; cr = `Signal faded, locking +${(pp * 100).toFixed(2)}%.`; }
         if ((ex.dir === "long" && best.sig.s === "SHORT") || (ex.dir === "short" && best.sig.s === "LONG")) { sc = true; cr = `Signal reversed on ${agTF}.`; }
         if (sc) {
-          const rp = pp * ex.size; port.cap += rp; ags[aId].pnl += rp; ags[aId].trades++; if (rp > 0) ags[aId].wins++; ags[aId].op--;
+          const exitFee = ex.size * TAKER_FEE;
+          const rp = pp * ex.size - exitFee; port.cap += rp; ags[aId].pnl += rp; ags[aId].trades++; if (rp > 0) ags[aId].wins++; ags[aId].op--;
           delete positions[pk];
-          const trade = { t: Date.now(), cId, aId, pair: best.pair, act: "CLOSE", dir: ex.dir, pnl: rp, pp, reason: cr, price: cp, entry: ex.entry, size: ex.size, dur: Date.now() - ex.ot, ind: best.sig.ind, tf: agTF, htf: agHTF, agentName: agent.n };
+          const trade = { t: Date.now(), cId, aId, pair: best.pair, act: "CLOSE", dir: ex.dir, pnl: rp, pp, reason: cr, price: cp, fill: exitFill, slip: Math.abs(exitFill - cp), fee: exitFee, entry: ex.entry, size: ex.size, dur: Date.now() - ex.ot, ind: best.sig.ind, tf: agTF, htf: agHTF, agentName: agent.n };
           newTrades.push(trade);
         }
         return;
@@ -235,9 +264,12 @@ function runCycle() {
       if (best.sig.c < cond.ct) return;
       const ap = Object.keys(positions).filter(k => k.startsWith(`${cId}_${aId}`)).length; if (ap >= 2) return;
       const dir = best.sig.s === "LONG" ? "long" : "short"; const sz = port.cap * wt * em; if (sz < 10) return;
-      positions[pk] = { entry: cp, size: sz, dir, ot: Date.now(), sl: best.sig.sl, tp: best.sig.tp };
+      const atrArr = atr(best.cn); const atrVal = atrArr[atrArr.length - 1] || 0;
+      const fillPrice = calcSlippage(best.pair, cp, sz, dir, atrVal);
+      const entryCost = sz * TAKER_FEE; port.cap -= entryCost;
+      positions[pk] = { entry: fillPrice, size: sz, dir, ot: Date.now(), sl: best.sig.sl, tp: best.sig.tp };
       ags[aId].op = (ags[aId].op || 0) + 1; port.tc = (port.tc || 0) + 1;
-      const trade = { t: Date.now(), cId, aId, pair: best.pair, act: "OPEN", dir, size: sz, reason: best.sig.r, price: cp, conf: best.sig.c, sl: best.sig.sl, tp: best.sig.tp, ind: best.sig.ind, strat: agent.s, tf: agTF, htf: agHTF, hold: agTF === "1d" || agTF === "1w" ? "weeks" : agTF === "4h" ? "days" : "hours", agentName: agent.n };
+      const trade = { t: Date.now(), cId, aId, pair: best.pair, act: "OPEN", dir, size: sz, reason: best.sig.r, price: cp, fill: fillPrice, slip: Math.abs(fillPrice - cp), fee: entryCost, conf: best.sig.c, sl: best.sig.sl, tp: best.sig.tp, ind: best.sig.ind, strat: agent.s, tf: agTF, htf: agHTF, hold: agTF === "1d" || agTF === "1w" ? "weeks" : agTF === "4h" ? "days" : "hours", agentName: agent.n };
       newTrades.push(trade);
     });
 
