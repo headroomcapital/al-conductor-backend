@@ -320,7 +320,8 @@ function runCycle() {
     cond.ag.forEach(aId => {
       console.log("[DEBUG]   Processing agent:", aId, "for", cId);
       if (!ags[aId]) return;
-      const agent = AG[aId]; const sigFn = SIG[aId]; if (!sigFn) return;
+      const agent = AG[aId]; const sigFn = SIG[aId]; 
+      if (!sigFn) { console.log("[DEBUG]     Agent", aId, "NO SIGNAL FUNCTION"); return; }
       const agTF = agent.tf; const agHTF = agent.htf;
 
       const ps = PAIRS.map(pair => {
@@ -332,7 +333,9 @@ function runCycle() {
         return { pair, sc: sig.c, sig, cn, cl };
       }).sort((a, b) => b.sc - a.sc);
 
-      const best = ps[0]; if (!best?.sig) return;
+      const best = ps[0]; 
+      if (!best?.sig) { console.log("[DEBUG]     Agent", aId, "NO VALID SIGNAL"); return; }
+      console.log("[DEBUG]     Agent", aId, "has signal - proceeding...");
       const pk = `${cId}_${aId}_${best.pair}`; const ex = positions[pk];
       const cp = best.cl[best.cl.length - 1]; const wt = cond.w[aId] || .1;
       ags[aId].ls = best.sig.s; ags[aId].lr = best.sig.r; ags[aId].lp = PL[best.pair];
